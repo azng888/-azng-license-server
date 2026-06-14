@@ -6,7 +6,7 @@ A.Z.N.G. 授權金鑰驗證伺服器 v2
 """
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import PlainTextResponse
+from fastapi.responses import PlainTextResponse, HTMLResponse
 from pydantic import BaseModel
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
@@ -17,8 +17,7 @@ import random
 import string
 import requests as req_lib
 import hashlib
-import hmac
-import base64
+import urllib.parse
 
 app = FastAPI()
 
@@ -31,6 +30,10 @@ SHEET_URL = os.environ.get("LICENSE_SHEET_URL", "")
 CREDS_JSON = os.environ.get("GOOGLE_CREDS_JSON", "")
 LINE_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "")
 LINE_SECRET = os.environ.get("LINE_CHANNEL_SECRET", "")
+ECPAY_MERCHANT_ID = os.environ.get("ECPAY_MERCHANT_ID", "")
+ECPAY_HASH_KEY = os.environ.get("ECPAY_HASH_KEY", "")
+ECPAY_HASH_IV = os.environ.get("ECPAY_HASH_IV", "")
+ECPAY_API_URL = "https://payment.ecpay.com.tw/Cashier/AioCheckOut/V5"
 
 # ===== Sheets 連線 =====
 def get_license_sheet():
@@ -45,6 +48,14 @@ def generate_key():
     def seg():
         return ''.join(random.choices(chars, k=4))
     return f"ANG-{seg()}-{seg()}-{seg()}"
+
+# ===== 產生綠界檢查碼 =====
+def generate_check_mac_value(params: dict) -> str:
+    sorted_params = sorted(params.items())
+    raw = "&".join(f"{k}={v}" for k, v in sorted_params)
+    raw = f"HashKey={ECPAY_HASH_KEY}&{raw}&HashIV={ECPAY_HASH_IV}"
+    raw = urllib.parse.quote_plus(raw).lower()
+    return hashlib.sha256(raw.encode()).hexdigest().upper()
 
 # ===== 發送 LINE 訊息 =====
 def send_line_message(user_id: str, text: str):
@@ -105,7 +116,6 @@ async def line_webhook(request: Request):
     
     for event in data.get("events", []):
         if event.get("type") == "follow":
-            # 用戶加好友，發送歡迎訊息
             user_id = event["source"]["userId"]
             send_line_message(user_id,
                 "🎉 歡迎加入 A.Z.N.G. Threads 發文輔助系統！\n\n"
@@ -118,7 +128,6 @@ async def line_webhook(request: Request):
             text = event["message"].get("text", "").strip()
             
             if text == "購買":
-                # 回傳付款選項
                 send_line_message(user_id,
                     "💳 請選擇方案：\n\n"
                     "🔹 試用轉訂閱：NT$299/月\n"
@@ -136,7 +145,6 @@ async def line_webhook(request: Request):
                     "加購帳號金鑰": "199"
                 }
                 price = price_map[text]
-                # 付款連結帶入 user_id 方便付款後對應
                 pay_url = f"https://azng-license-server.onrender.com/pay?uid={user_id}&plan={text}&amount={price}"
                 send_line_message(user_id,
                     f"✅ 您選擇的方案：{text}（NT${price}）\n\n"
@@ -146,17 +154,57 @@ async def line_webhook(request: Request):
     
     return {"status": "ok"}
 
+# ===== 付款頁面（導向綠界）=====
+@app.get("/pay")
+async def pay_redirect(uid: str, plan: str, amount: str):
+    now = datetime.now().strftime("%Y%m%d%H%M%S")
+    order_id = f"ANG{datetime.now().strftime('%Y%m%d%H%M%S')}{random.randint(100,999)}"
+    
+    params = {
+        "MerchantID": ECPAY_MERCHANT_ID,
+        "MerchantTradeNo": order_id,
+        "MerchantTradeDate": now,
+        "PaymentType": "aio",
+        "TotalAmount": amount,
+        "TradeDesc": f"AZNG {plan}",
+        "ItemName": f"A.Z.N.G. {plan}",
+        "ReturnURL": "https://azng-license-server.onrender.com/ecpay/notify",
+        "ClientBackURL": "https://azng888.github.io",
+        "ChoosePayment": "ALL",
+        "EncryptType": "1",
+        "CustomField1": f"{uid}|{plan}",
+    }
+    params["CheckMacValue"] = generate_check_mac_value(params)
+
+    # 產生自動提交的 HTML 表單跳轉到綠界
+    form_inputs = "\n".join(
+        f'<input type="hidden" name="{k}" value="{v}">'
+        for k, v in params.items()
+    )
+    html = f"""
+    <!DOCTYPE html>
+    <html>
+    <head><meta charset="utf-8"><title>跳轉付款中...</title></head>
+    <body>
+        <p>正在跳轉到付款頁面，請稍候...</p>
+        <form id="pay_form" method="POST" action="{ECPAY_API_URL}">
+            {form_inputs}
+        </form>
+        <script>document.getElementById('pay_form').submit();</script>
+    </body>
+    </html>
+    """
+    return HTMLResponse(content=html)
+
 # ===== 綠界付款通知 =====
 @app.post("/ecpay/notify")
 async def ecpay_notify(request: Request):
     form = await request.form()
     data = dict(form)
     
-    # 確認付款成功
     if data.get("RtnCode") != "1":
         return PlainTextResponse("0|error")
     
-    # 從訂單備註取出 user_id 和 plan
     custom_field = data.get("CustomField1", "")
     try:
         parts = custom_field.split("|")
@@ -166,14 +214,10 @@ async def ecpay_notify(request: Request):
         return PlainTextResponse("0|error")
     
     try:
-        # 產生金鑰
         key = generate_key()
         sheet = get_license_sheet()
-        
-        # 計算到期日（一個月後）
         expire = (datetime.now() + timedelta(days=30)).strftime("%Y/%m/%d")
         
-        # 取用戶名稱（從 LINE API）
         user_name = "用戶"
         try:
             r = req_lib.get(
@@ -186,10 +230,8 @@ async def ecpay_notify(request: Request):
         except Exception:
             pass
         
-        # 寫入 Sheets
         write_key_to_sheet(sheet, key, user_name, user_id, plan, expire)
         
-        # 發送金鑰給用戶
         send_line_message(user_id,
             f"🎉 付款成功！感謝您購買 A.Z.N.G. {plan}\n\n"
             f"🔑 您的授權金鑰：\n{key}\n\n"
@@ -201,17 +243,6 @@ async def ecpay_notify(request: Request):
         return PlainTextResponse("0|error")
     
     return PlainTextResponse("1|OK")
-
-# ===== 付款頁面（導向綠界）=====
-@app.get("/pay")
-async def pay_redirect(uid: str, plan: str, amount: str):
-    # 這裡之後接綠界付款頁，先回傳確認訊息
-    return {
-        "message": "付款頁面建置中",
-        "uid": uid,
-        "plan": plan,
-        "amount": amount
-    }
 
 # ===== 健康檢查 =====
 @app.get("/")
