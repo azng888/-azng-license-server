@@ -206,6 +206,30 @@ async def line_webhook(request: Request):
                     "📄 完整介紹：https://azng888.github.io\n\n"
                     "有任何問題歡迎直接留言，我們會盡快回覆你 😊"
                 )
+            
+            else:
+                # 抓用戶 LINE 名稱
+                display_name = "您"
+                try:
+                    r = req_lib.get(
+                        f"https://api.line.me/v2/bot/profile/{user_id}",
+                        headers={"Authorization": f"Bearer {LINE_TOKEN}"},
+                        timeout=5
+                    )
+                    if r.status_code == 200:
+                        display_name = r.json().get("displayName", "您")
+                except Exception:
+                    pass
+                
+                send_line_message(user_id,
+                    f"{display_name} 您好！感謝您的訊息 😊\n\n"
+                    "您可以輸入以下關鍵字獲得對應資訊：\n\n"
+                    "💰 價格 → 查看方案定價\n"
+                    "🛠️ 想了解 → 了解產品功能介紹\n"
+                    "🎁 申請試用 → 申請試用資格\n"
+                    "💳 購買 → 開始購買流程\n"
+                    "👨‍💼 客服 → 聯絡客服"
+                )
     
     return {"status": "ok"}
 
