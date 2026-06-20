@@ -169,14 +169,38 @@ async def line_webhook(request: Request):
                     "正式月費": "499",
                     "加購帳號金鑰": "199"
                 }
-                price = price_map[text]
-                pay_url = f"https://azng-license-server.onrender.com/pay?uid={user_id}&plan={text}&amount={price}"
-                send_line_message(user_id,
-                    f"✅ 您選擇的方案：{text}（NT${price}）\n\n"
-                    f"請點擊以下連結完成付款：\n{pay_url}\n\n"
-                    "付款完成後系統將自動發送金鑰給您 🎁"
-                    + AUTO_REPLY_SUFFIX
-                )
+                
+                # 新舊用戶判斷
+                is_existing_user = False
+                try:
+                    sheet = get_license_sheet()
+                    records = sheet.get_all_records()
+                    for row in records:
+                        if str(row.get("LINE ID", "")).strip() == user_id:
+                            is_existing_user = True
+                            break
+                except Exception:
+                    pass
+                
+                # 舊用戶限制：只能選正式月費或加購帳號金鑰
+                if is_existing_user and text in ["試用轉訂閱", "新用戶首月"]:
+                    send_line_message(user_id,
+                        "⚠️ 您已是既有用戶，此方案僅供新用戶使用。\n\n"
+                        "請選擇以下方案：\n"
+                        "🔹 正式月費：NT$499/月\n"
+                        "🔹 加購帳號金鑰：NT$199\n\n"
+                        "回覆方案名稱即可繼續。"
+                        + AUTO_REPLY_SUFFIX
+                    )
+                else:
+                    price = price_map[text]
+                    pay_url = f"https://azng-license-server.onrender.com/pay?uid={user_id}&plan={text}&amount={price}"
+                    send_line_message(user_id,
+                        f"✅ 您選擇的方案：{text}（NT${price}）\n\n"
+                        f"請點擊以下連結完成付款：\n{pay_url}\n\n"
+                        "付款完成後系統將自動發送金鑰給您 🎁"
+                        + AUTO_REPLY_SUFFIX
+                    )
             
             elif text in ["客服", "客服諮詢"]:
                 display_name = get_display_name(user_id)
@@ -315,7 +339,6 @@ async def ecpay_notify(request: Request):
         return PlainTextResponse("0|error")
     
     try:
-        key = generate_key()
         sheet = get_license_sheet()
         expire = (datetime.now() + timedelta(days=30)).strftime("%Y/%m/%d")
         
@@ -330,16 +353,40 @@ async def ecpay_notify(request: Request):
                 user_name = r.json().get("displayName", "用戶")
         except Exception:
             pass
-        
-        write_key_to_sheet(sheet, key, user_name, user_id, plan, expire)
-        
-        send_line_message(user_id,
-            f"🎉 付款成功！感謝您購買 A.Z.N.G. {plan}\n\n"
-            f"🔑 您的授權金鑰：\n{key}\n\n"
-            f"📅 有效期限：{expire}\n\n"
-            "請將金鑰複製到程式的「金鑰授權」欄位並點擊驗證。\n"
-            "如有任何問題請輸入"客服"詢問並等待專人為您服務🙌"
-        )
+
+        # 判斷新舊用戶：找有無對應 LINE ID 的金鑰
+        records = sheet.get_all_records()
+        existing_row_index = None
+        existing_key = None
+        for i, row in enumerate(records):
+            if str(row.get("LINE ID", "")).strip() == user_id:
+                existing_row_index = i + 2  # Sheets row index（1-based + 標頭）
+                existing_key = str(row.get("金鑰", "")).strip()
+                break
+
+        if existing_row_index and existing_key:
+            # 舊用戶：延長到期日
+            sheet.update_cell(existing_row_index, 6, expire)  # 第6欄 = 到期日
+            sheet.update_cell(existing_row_index, 2, "啟用")  # 確保狀態為啟用
+            key = existing_key
+            send_line_message(user_id,
+                f"🎉 續訂成功！感謝您繼續使用 A.Z.N.G. {plan}\n\n"
+                f"🔑 您的授權金鑰（沿用舊金鑰）：\n{key}\n\n"
+                f"📅 新的有效期限：{expire}\n\n"
+                "金鑰不變，程式重新驗證後即可繼續使用。\n"
+                "如有任何問題請直接在此詢問 🙌"
+            )
+        else:
+            # 新用戶：產生新金鑰
+            key = generate_key()
+            write_key_to_sheet(sheet, key, user_name, user_id, plan, expire)
+            send_line_message(user_id,
+                f"🎉 付款成功！感謝您購買 A.Z.N.G. {plan}\n\n"
+                f"🔑 您的授權金鑰：\n{key}\n\n"
+                f"📅 有效期限：{expire}\n\n"
+                "請將金鑰複製到程式的「金鑰授權」欄位並點擊驗證。\n"
+                "如有任何問題請輸入"客服"詢問並等待專人為您服務🙌"
+            )
     except Exception as e:
         return PlainTextResponse("0|error")
     
