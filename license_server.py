@@ -387,7 +387,7 @@ async def ecpay_notify(request: Request):
                 f"🔑 您的授權金鑰：\n{key}\n\n"
                 f"📅 有效期限：{expire}\n\n"
                 "請將金鑰複製到程式的「金鑰授權」欄位並點擊驗證。\n"
-                "如有任何問題請輸入"客服"詢問並請耐心等待專人為您服務🙌"
+                "如有任何問題請輸入『客服』詢問並請耐心等待專人為您服務🙌"
             )
     except Exception as e:
         return PlainTextResponse("0|error")
@@ -395,6 +395,6 @@ async def ecpay_notify(request: Request):
     return PlainTextResponse("1|OK")
 
 # ===== 健康檢查 =====
-@app.get("/")
+@app.api_route("/", methods=["GET", "HEAD"])
 def health_check():
     return {"status": "AZNG License Server Running"}
