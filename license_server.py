@@ -108,6 +108,25 @@ def verify_license(req: LicenseRequest):
         return {"valid": True, "reason": "OK", "status": status}
     return {"valid": False, "reason": "金鑰不存在"}
 
+# ===== 開發者 LINE ID =====
+DEVELOPER_LINE_ID = "U34520b4e3710e5ad67f32072513cd873"
+
+AUTO_REPLY_SUFFIX = "\n\n─────────────────\n以上為自動回覆，如需真人協助請輸入『客服』"
+
+# ===== 抓用戶 LINE 名稱 =====
+def get_display_name(user_id: str) -> str:
+    try:
+        r = req_lib.get(
+            f"https://api.line.me/v2/bot/profile/{user_id}",
+            headers={"Authorization": f"Bearer {LINE_TOKEN}"},
+            timeout=5
+        )
+        if r.status_code == 200:
+            return r.json().get("displayName", "用戶")
+    except Exception:
+        pass
+    return "用戶"
+
 # ===== LINE Webhook =====
 @app.post("/line/webhook")
 async def line_webhook(request: Request):
@@ -140,6 +159,7 @@ async def line_webhook(request: Request):
                     "🔹 正式月費：NT$499/月\n"
                     "🔹 加購帳號金鑰：NT$199\n\n"
                     "請回覆方案名稱，例如：「正式月費」"
+                    + AUTO_REPLY_SUFFIX
                 )
             
             elif text in ["試用轉訂閱", "新用戶首月", "正式月費", "加購帳號金鑰"]:
@@ -155,13 +175,23 @@ async def line_webhook(request: Request):
                     f"✅ 您選擇的方案：{text}（NT${price}）\n\n"
                     f"請點擊以下連結完成付款：\n{pay_url}\n\n"
                     "付款完成後系統將自動發送金鑰給您 🎁"
+                    + AUTO_REPLY_SUFFIX
                 )
             
             elif text in ["客服", "客服諮詢"]:
+                display_name = get_display_name(user_id)
                 send_line_message(user_id,
                     "你好！感謝你聯繫 A.Z.N.G. 客服 🙌\n\n"
                     "我們已收到你的訊息，將會在最短時間內回覆你（通常在數小時內）。\n\n"
                     "如有緊急問題，也歡迎直接在此說明你的狀況，我們會優先處理 ✅"
+                )
+                # 通知開發者
+                now_str = datetime.now().strftime("%Y/%m/%d %H:%M")
+                send_line_message(DEVELOPER_LINE_ID,
+                    f"🔔 有用戶需要客服協助\n"
+                    f"👤 用戶名稱：{display_name}\n"
+                    f"🆔 LINE ID：{user_id}\n"
+                    f"⏰ 時間：{now_str}"
                 )
             
             elif text in ["申請試用", "試用"]:
@@ -178,6 +208,7 @@ async def line_webhook(request: Request):
                     "2️⃣ 你主要想解決什麼問題\n"
                     "3️⃣ 你目前使用 Windows 嗎？\n\n"
                     "我們確認後會盡快與你聯繫安排試用 ✅"
+                    + AUTO_REPLY_SUFFIX
                 )
             
             elif text in ["價格", "方案", "定價"]:
@@ -190,6 +221,7 @@ async def line_webhook(request: Request):
                     "✦ 推薦新用戶成功訂閱，當月享 $299\n"
                     "✦ 所有方案均包含功能持續迭代更新\n\n"
                     "如有任何疑問歡迎直接留言詢問 😊"
+                    + AUTO_REPLY_SUFFIX
                 )
             
             elif text in ["想了解", "介紹", "功能"]:
@@ -205,22 +237,11 @@ async def line_webhook(request: Request):
                     "商家品牌、蝦皮分潤、個人品牌、KOL、接案者、課程銷售者\n\n"
                     "📄 完整介紹：https://azng888.github.io\n\n"
                     "有任何問題歡迎直接留言，我們會盡快回覆你 😊"
+                    + AUTO_REPLY_SUFFIX
                 )
             
             else:
-                # 抓用戶 LINE 名稱
-                display_name = "您"
-                try:
-                    r = req_lib.get(
-                        f"https://api.line.me/v2/bot/profile/{user_id}",
-                        headers={"Authorization": f"Bearer {LINE_TOKEN}"},
-                        timeout=5
-                    )
-                    if r.status_code == 200:
-                        display_name = r.json().get("displayName", "您")
-                except Exception:
-                    pass
-                
+                display_name = get_display_name(user_id)
                 send_line_message(user_id,
                     f"{display_name} 您好！感謝您的訊息 😊\n\n"
                     "您可以輸入以下關鍵字獲得對應資訊：\n\n"
@@ -229,6 +250,7 @@ async def line_webhook(request: Request):
                     "🎁 申請試用 → 申請試用資格\n"
                     "💳 購買 → 開始購買流程\n"
                     "👨‍💼 客服 → 聯絡客服"
+                    + AUTO_REPLY_SUFFIX
                 )
     
     return {"status": "ok"}
