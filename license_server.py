@@ -10,7 +10,9 @@ from fastapi.responses import PlainTextResponse, HTMLResponse
 from pydantic import BaseModel
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+
+TW_TZ = timezone(timedelta(hours=8))
 import os
 import json
 import random
@@ -73,7 +75,7 @@ def send_line_message(user_id: str, text: str):
 
 # ===== 寫入金鑰到 Sheets =====
 def write_key_to_sheet(sheet, key, user_name, line_id, plan, expire_date=""):
-    now = datetime.now().strftime("%Y/%m/%d")
+    now = datetime.now(TW_TZ).strftime("%Y/%m/%d")
     sheet.append_row([key, "啟用", user_name, line_id, now, expire_date, f"方案：{plan}"])
 
 # ===== 金鑰驗證 API =====
@@ -100,8 +102,8 @@ def verify_license(req: LicenseRequest):
             return {"valid": False, "reason": "此金鑰已停用，請聯繫客服"}
         if expire_str:
             try:
-                expire_date = datetime.strptime(expire_str, "%Y/%m/%d")
-                if datetime.now() > expire_date:
+                expire_date = datetime.strptime(expire_str, "%Y/%m/%d").replace(tzinfo=TW_TZ)
+                if datetime.now(TW_TZ) > expire_date:
                     return {"valid": False, "reason": "金鑰已到期，請續費"}
             except ValueError:
                 pass
@@ -210,7 +212,7 @@ async def line_webhook(request: Request):
                     "如有緊急問題，也歡迎直接在此說明你的狀況，我們會優先處理 ✅"
                 )
                 # 通知開發者
-                now_str = datetime.now().strftime("%Y/%m/%d %H:%M")
+                now_str = datetime.now(TW_TZ).strftime("%Y/%m/%d %H:%M")
                 send_line_message(DEVELOPER_LINE_ID,
                     f"🔔 有用戶需要客服協助\n"
                     f"👤 用戶名稱：{display_name}\n"
@@ -282,8 +284,8 @@ async def line_webhook(request: Request):
 # ===== 付款頁面（導向綠界）=====
 @app.get("/pay")
 async def pay_redirect(uid: str, plan: str, amount: str):
-    now = datetime.now().strftime("%Y%m%d%H%M%S")
-    order_id = f"ANG{datetime.now().strftime('%Y%m%d%H%M%S')}{random.randint(100,999)}"
+    now = datetime.now(TW_TZ).strftime("%Y%m%d%H%M%S")
+    order_id = f"ANG{datetime.now(TW_TZ).strftime('%Y%m%d%H%M%S')}{random.randint(100,999)}"
     
     params = {
         "MerchantID": ECPAY_MERCHANT_ID,
@@ -340,7 +342,7 @@ async def ecpay_notify(request: Request):
     
     try:
         sheet = get_license_sheet()
-        expire = (datetime.now() + timedelta(days=30)).strftime("%Y/%m/%d")
+        expire = (datetime.now(TW_TZ) + timedelta(days=30)).strftime("%Y/%m/%d")
         
         user_name = "用戶"
         try:
